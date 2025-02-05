@@ -134,7 +134,7 @@ optimizer = torch.optim.LBFGS(model.parameters(),line_search_fn="strong_wolfe", 
 # %% training loop 
 train_losses = []
 test_losses = []
-epochs = 10 # number of epochs org = 1000
+epochs = 1 # number of epochs org = 1000
 
 def closure():
     optimizer.zero_grad() # zero the gradients from the last step
