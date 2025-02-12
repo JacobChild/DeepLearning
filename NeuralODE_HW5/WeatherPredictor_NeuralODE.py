@@ -139,51 +139,52 @@ plt.ylabel('MSE Loss')
  
 # Verification calculations and plot
 t_all = normalized_data['date']
-y_all = normalized_data.iloc[:,1:5]
+y_all = monthly_data.iloc[:,1:5]
 model.eval()
 with torch.no_grad():
     yhat = model(y_train[0, :], t_train)
-    ytake2 = model(y_train[0,:], t_everything)
+    ytake2 = model(y_train[0,:], t_everything) #technically this should run on y_test[0,:], t_test
     #unnormalize with mean_vals and std_vals from z normalization
     yhat = yhat.detach().numpy()*std_vals.values + mean_vals.values
     ytake2 = ytake2.detach().numpy()*std_vals.values + mean_vals.values
     
     fig, axs = plt.subplots(4, 1, figsize=(10, 15))
     axs[0].plot(t_all, y_all.iloc[:, 0], 'r', label='True', linestyle='None', marker = 'o')
-    axs[0].plot(t_all[:20], yhat.detach().numpy()[:, 0], 'r--', label='Training Fit')
-    axs[0].plot(t_all, ytake2.detach().numpy()[:,0], 'r.-.', label = 'Test Output')
+    axs[0].plot(t_all[:20], yhat[:, 0], 'r-', label='Training Fit')
+    axs[0].plot(t_all, ytake2[:,0], 'r.-.', label = 'Test Output')
     
-    axs[0].set_title('Variable 1')
+    axs[0].set_title('Mean Temp')
+    axs[0].set_xlabel('Date')
+    axs[0].set_ylabel('Temperature (C)')
     axs[0].legend()
     
     axs[1].plot(t_all, y_all.iloc[:, 1], 'b', label='True', linestyle='None', marker = 'o')
-    axs[1].plot(t_all[:20], yhat.detach().numpy()[:, 1], 'b--', label='Training Fit')
-    axs[1].plot(t_all, ytake2.detach().numpy()[:,1], 'b.-.', label = 'Test Output')
-    axs[1].set_title('Variable 2')
+    axs[1].plot(t_all[:20], yhat[:, 1], 'b-', label='Training Fit')
+    axs[1].plot(t_all, ytake2[:,1], 'b.-.', label = 'Test Output')
+    axs[1].set_title('Humidity')
+    axs[1].set_xlabel('Date')
+    axs[1].set_ylabel('Humidity (g/m^3)')
     axs[1].legend()
     
     axs[2].plot(t_all, y_all.iloc[:, 2], 'g', label='True', linestyle='None', marker = 'o')
-    axs[2].plot(t_all[:20], yhat.detach().numpy()[:, 2], 'g--', label='Training Fit')
-    axs[2].plot(t_all, ytake2.detach().numpy()[:,2], 'g.-.', label = 'Test Output')
-    axs[2].set_title('Variable 3')
+    axs[2].plot(t_all[:20], yhat[:, 2], 'g-', label='Training Fit')
+    axs[2].plot(t_all, ytake2[:,2], 'g.-.', label = 'Test Output')
+    axs[2].set_title('Wind Speed')
+    axs[2].set_xlabel('Date')
+    axs[2].set_ylabel('Wind Speed (m/s)')
     axs[2].legend()
     
     axs[3].plot(t_all, y_all.iloc[:, 3], 'orange', label='True', linestyle='None', marker = 'o')
-    axs[3].plot(t_all[:20], yhat.detach().numpy()[:, 3], 'orange', linestyle = '--', label='Training Fit')
-    axs[3].plot(t_all, ytake2.detach().numpy()[:,3], 'orange', linestyle = '-.', label = 'Test Output')
-    axs[3].set_title('Variable 4')
+    axs[3].plot(t_all[:20], yhat[:, 3], 'orange', linestyle = '-', label='Training Fit')
+    axs[3].plot(t_all, ytake2[:,3], 'orange', linestyle = '-.', label = 'Test Output')
+    axs[3].set_title('Mean Pressure')
+    axs[3].set_xlabel('Date')
+    axs[3].set_ylabel('Mean Pressure (hPa)')
+    axs[3].set_ylim(990,1030)
     axs[3].legend()
-    
-    for ax in axs:
-        ax.set_xlabel('Time')
-        ax.set_ylabel('Value')
     
     plt.tight_layout()
     plt.show()
 
 
-# %%
-plt.figure()
-plt.plot(t_all,y_all,linestyle = 'None', marker = 'o')
-plt.plot(t_all,ytake2.detach().numpy())
 # %%
