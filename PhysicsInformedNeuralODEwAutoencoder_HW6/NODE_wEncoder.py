@@ -82,7 +82,7 @@ def my_loss_func(modelf, xf, x_colf, f_colf, t_trainf, lossfnf, ef):
     col_phys_loss = lossfnf(zdot_col, dzdt)
     #reconstruction2 loss mse(x_col, decode(encode(x_col)))
     col_recon_loss = lossfnf(x_colf, modelf.decoder_psi_network(z_col))
-    if (ef+1)%100 == 0:
+    if (ef+1)%1000 == 0:
         print('data_loss', data_loss)
         print('data_recon_loss', data_recon_loss)
         print('col_phys_loss', col_phys_loss)
@@ -119,7 +119,7 @@ t_test = np.linspace(0.0, 1.0, nt_test)
 # You will need more training pts and collocation pts eventually (testing pts can remain as is).
 ntrain = 600
 ntest = 100
-ncol = 10000
+ncol = 1000
 Xtrain, Xtest, Xcol, fcol, Amap = getdata(ntrain, ntest, ncol, t_train, t_test)
 #convert to tensors
 Xtrain_tensor = torch.tensor(Xtrain, dtype = torch.float64)
@@ -135,21 +135,21 @@ t_test_tensor = torch.tensor(t_test, dtype = torch.float64)
 # fcol is ncol x nx and represents f(Xcol)
 # Amap is only needed for final plot (see function below)
 #initialize the model 
-hlayers = 6
+hlayers = 5
 num_inputs = Xtrain.shape[2]
 n_min = 2
 model = MyBigNetwork(num_inputs, n_min, hlayers)
 model.double()
 # print(model.network[2].weight.shape)
 # optimizer = torch.optim.Adam(model.parameters(), lr = .1)
-optimizer = optim.Adam(model.parameters(), lr = 1e-3)
-my_lr_scheduler = lr_scheduler.StepLR(optimizer, step_size = 500, gamma = 0.8)
+optimizer = optim.Adam(model.parameters(), lr = .01)
+my_lr_scheduler = lr_scheduler.StepLR(optimizer, step_size = 1000, gamma = 0.5)
 
 # training loop
-epochs = 1000
+epochs = 5000 #at 4500 I had 0.106 for last test loss
 train_losses = []
 test_losses = []
-plotter_val = 100
+plotter_val = 500
 
 for e in range(epochs): #range(epochs[i]):
         train_losses.append(train(Xtrain_tensor, Xcol_tensor, fcol_tensor, t_train_tensor, model, optimizer, nn.MSELoss(),e))
@@ -171,11 +171,12 @@ for e in range(epochs): #range(epochs[i]):
             plt.show()
             plt.pause(0.001) 
 
-#!Plot train *and* test losses
 
 # evaluate
 model.eval()
 Xhat = model.forward(Xtest_tensor[:, 0, :], t_test_tensor)
+# test_loss = nn.MSELoss()(Xhat, Xtest_tensor)
+# test_losses.append(test_loss.item())
 # once you have a prediction for Xhat(t) (ntest x nt_test x nx)
 # this will use this specific projection to Z, to create a plot
 # like the bottom right corner of Fig 3
@@ -184,18 +185,39 @@ Zhat_true = true_encoder(Xtest, Amap)
 
 #%% plotting
 #plot losses 
-plt.figure
-plt.semilogy(train_losses)
-plt.semilogy(test_losses)
+plt.figure()
+plt.semilogy(train_losses, label = 'Training Loss')
+plt.semilogy(range(500,5500,500),test_losses, label = 'Testing Loss') 
+plt.title('Training and Testing Losses')
+plt.xlabel('Epochs')
+plt.ylabel('MSE Loss')
+plt.legend()
+plt.show()
 
 plt.figure()
-for i in range(0, ntest):
+add_true_label = True
+add_predicted_label = True
+
+for i in range(ntest):
+    plt.plot(Zhat_true[i, 0, 0], Zhat_true[i, 0, 1], "ro", alpha=0.5)
+    if add_true_label:
+        plt.plot(Zhat_true[i, :, 0], Zhat_true[i, :, 1], "r", alpha=0.5, label='True Zhat')
+        add_true_label = False
+    else:
+        plt.plot(Zhat_true[i, :, 0], Zhat_true[i, :, 1], "r", alpha=0.5)
+    
     plt.plot(Zhat[i, 0, 0], Zhat[i, 0, 1], "ko")
-    plt.plot(Zhat_true[i, 0, 0], Zhat_true[i, 0, 1], "ro")
-    plt.plot(Zhat[i, :, 0], Zhat[i, :, 1], "k")
-    plt.plot(Zhat_true[i, :, 0], Zhat_true[i, :, 1], "r")
+    if add_predicted_label:
+        plt.plot(Zhat[i, :, 0], Zhat[i, :, 1], "k", label='Predicted Zhat')
+        add_predicted_label = False
+    else:
+        plt.plot(Zhat[i, :, 0], Zhat[i, :, 1], "k")
+    
     plt.xlim([-1.5, 1.5])
     plt.ylim([-1, 1])
 
+plt.legend()
+plt.title('Learned Dynamics')
 plt.show()
+
 # %%
