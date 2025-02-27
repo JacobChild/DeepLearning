@@ -9,6 +9,7 @@ import torch
 from torch import nn
 import torch.optim as optim
 import torch.optim.lr_scheduler as lr_scheduler
+import matplotlib.pyplot as plt
 
 #%% Create My network and functions etc
 class MyBigNetwork(nn.Module):
