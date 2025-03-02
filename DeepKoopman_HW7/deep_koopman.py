@@ -7,7 +7,7 @@ import numpy as np
 import torch 
 from torch import nn
 import torch.optim as optim
-# import torch.optim.lr_scheduler as lr_scheduler
+import torch.optim.lr_scheduler as lr_scheduler
 import matplotlib.pyplot as plt
 
 # %% My Models and functions
@@ -82,7 +82,7 @@ file_loc2 = 'DeepKoopman_HW7/kdata.txt'
 ntraj = 2148  # number of trajectories, max 2148
 nt = 50  # number of time steps
 ny = 7  # number of states
-train_split = 1500
+train_split = 2000
 
 tvec = np.linspace(0, 350, nt)
 try: #this will run in an interactive session
@@ -99,13 +99,15 @@ Ytrain_tensor = torch.tensor(Ytrain, dtype = torch.float64, requires_grad=True)
 Ytest_tensor = torch.tensor(Ytest, dtype = torch.float64, requires_grad=False)
 
 #%% Training run
-model = MyBigNetwork(nin=ny, nmid=21, hidden_layers=4)
+model = MyBigNetwork(nin=ny, nmid=21, hidden_layers=5)
 model.double()
 optimizer = optim.Adam(model.parameters(), lr=1e-2)
+my_lr_scheduler = lr_scheduler.StepLR(optimizer, step_size = 5000, gamma = 0.8)
+
 loss_fn = nn.MSELoss()
 
-epochs = 15000
-plotter_val = 1000
+epochs = 30000 #30000
+plotter_val = 1000 #1000
 train_losses = []
 test_losses = []
 
@@ -129,6 +131,7 @@ for e in range(epochs): #range(epochs[i]):
             model.eval()
             Zpred = model.forward(Ytest_tensor[:,0,:], tvec_tensor)
             test_losses.append(loss_fn(Ytest_tensor, Zpred).detach().numpy())
+            torch.save(model, f'model1_epoch{e+1}')
             plt.figure()
             plt.semilogy(train_losses, label='Training Loss')
             plt.semilogy(range(plotter_val - 1, e + 1, plotter_val), test_losses, label='Testing Loss')
@@ -138,17 +141,17 @@ for e in range(epochs): #range(epochs[i]):
             plt.legend()
             plt.show()
             plt.pause(0.001)
-# %% Plot Trajectories, just the first 3 states
+  # %% Plot Trajectories, just the first 3 states
 model.eval()
-Zpred_train = model.forward(Ytest_tensor[:,0,:], tvec_tensor)
+Zpred_test = model.forward(Ytest_tensor[:,0,:], tvec_tensor)
 
-plt.plot(tvec, Ytrain[0,:,0], 'r--', label='True State 1')  # Dashed line for true state 1
-plt.plot(tvec, Ytrain[0,:,1], 'b--', label='True State 2')  # Dashed line for true state 2
-plt.plot(tvec, Ytrain[0,:,2], 'g--', label='True State 3')  # Dashed line for true state 3
+plt.plot(tvec, Ytest[0,:,0], 'r--', label='True State 1')  # Dashed line for true state 1
+plt.plot(tvec, Ytest[0,:,1], 'b--', label='True State 2')  # Dashed line for true state 2
+plt.plot(tvec, Ytest[0,:,2], 'g--', label='True State 3')  # Dashed line for true state 3
 
-plt.plot(tvec, Zpred_train.detach().numpy()[0, :, 0], 'r-', label='Predicted State 1')  # Solid line for predicted state 1
-plt.plot(tvec, Zpred_train.detach().numpy()[0, :, 1], 'b-', label='Predicted State 2')  # Solid line for predicted state 2
-plt.plot(tvec, Zpred_train.detach().numpy()[0, :, 2], 'g-', label='Predicted State 3')  # Solid line for predicted state 3
+plt.plot(tvec, Zpred_test.detach().numpy()[0, :, 0], 'r-', label='Predicted State 1')  # Solid line for predicted state 1
+plt.plot(tvec, Zpred_test.detach().numpy()[0, :, 1], 'b-', label='Predicted State 2')  # Solid line for predicted state 2
+plt.plot(tvec, Zpred_test.detach().numpy()[0, :, 2], 'g-', label='Predicted State 3')  # Solid line for predicted state 3
 
 plt.xlabel('Time')
 plt.ylabel('State Value')
@@ -159,4 +162,64 @@ plt.show()
 
 
 
+# %% Continue with saved model from above
+model2 = torch.load('model2_epoch5000')
+optimizer = optim.Adam(model2.parameters(), lr=1e-1)
+my_lr_scheduler = lr_scheduler.StepLR(optimizer, step_size = 5000, gamma = 0.5)
+
+loss_fn = nn.MSELoss()
+
+epochs = 1000 #30000
+plotter_val = 500 #1000
+train_losses = []
+test_losses = []
+
+for e in range(epochs): #range(epochs[i]):
+        model2.train()
+        optimizer.zero_grad()
+        #? train just the encoder first
+        if e < 25:
+            loss = loss_fn(Ytrain_tensor, model2.dec_psi_net(model2.enc_phi_net(Ytrain_tensor)))
+        else:
+            loss = my_loss_func(model2,Ytrain_tensor, tvec_tensor, loss_fn, e)
+        
+        train_losses.append(loss.detach().numpy())
+        
+        loss.backward()
+        optimizer.step()
+            
+        #every 100 epochs plot the training loss and compute and plot the testing loss
+        if (e+1)%plotter_val == 0:
+            print('epochs done: ', e+1, '/', epochs)
+            model2.eval()
+            Zpred = model2.forward(Ytest_tensor[:,0,:], tvec_tensor)
+            test_losses.append(loss_fn(Ytest_tensor, Zpred).detach().numpy())
+            torch.save(model2, f'model2_epoch{e+1}')
+            plt.figure()
+            plt.semilogy(train_losses, label='Training Loss')
+            plt.semilogy(range(plotter_val - 1, e + 1, plotter_val), test_losses, label='Testing Loss')
+            plt.title('Training and Testing Losses')
+            plt.xlabel('Epochs')
+            plt.ylabel('MSE Loss')
+            plt.legend()
+            plt.show()
+            plt.pause(0.001)
+
+
+
+#%%
+Zpred_test = model2.forward(Ytrain_tensor[:,0,:], tvec_tensor)
+
+plt.plot(tvec, Ytest[0,:,0], 'r--', label='True State 1')  # Dashed line for true state 1
+plt.plot(tvec, Ytest[0,:,1], 'b--', label='True State 2')  # Dashed line for true state 2
+plt.plot(tvec, Ytest[0,:,2], 'g--', label='True State 3')  # Dashed line for true state 3
+
+plt.plot(tvec, Zpred_test.detach().numpy()[0, :, 0], 'r-', label='Predicted State 1')  # Solid line for predicted state 1
+plt.plot(tvec, Zpred_test.detach().numpy()[0, :, 1], 'b-', label='Predicted State 2')  # Solid line for predicted state 2
+plt.plot(tvec, Zpred_test.detach().numpy()[0, :, 2], 'g-', label='Predicted State 3')  # Solid line for predicted state 3
+
+plt.xlabel('Time')
+plt.ylabel('State Value')
+plt.title('True vs Predicted States')
+plt.show()
 # %%
