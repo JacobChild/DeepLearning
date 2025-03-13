@@ -68,9 +68,11 @@ class SuperRes(nn.Module):
             nn.ReLU(),
             nn.Conv2d(16, 32, 5, padding=2),
             nn.ReLU(),
-            nn.Conv2d(32, 16, 5, padding=2),
+            nn.Conv2d(32, 64, 5, padding=2),
             nn.ReLU(),
-            nn.Conv2d(16, n_outchan, 5, padding=2)
+            nn.Conv2d(64, 32, 5, padding=2),
+            nn.ReLU(),
+            nn.Conv2d(32, n_outchan, 5, padding=2)
         )
         
         #AI recommened weight initalization based off of the paper
@@ -86,7 +88,7 @@ class SuperRes(nn.Module):
                     nn.init.constant_(layer.bias, 0.0)
         
     def forward(self, x):
-        return self.conv_layers(x)
+        return set_bcs(self.conv_layers(x))
 
 
 # see https://en.wikipedia.org/wiki/Finite_difference_coefficient
@@ -115,8 +117,7 @@ def ddeta(f, h):
 def set_bcs(hr_out):
     # bc's
     #The bottom edge (η = 0) is inflow with conditions: u=0,v=1,dp/dη=0. So if u, v, p were tensors of size neta x nxi we would set: u[0, :] = 0; v[0, :] = 1; p[0, :] = p[1, :]. The latter forces the pressure gradient to be zero at the inlet (which just means it is at some unknown constant pressure). The left and right edges are walls with conditions: u=0,v=0,dp/dξ=0 (the latter is a result from incompressible boundary layer theory). At the top (outlet) we set du/dη=0,dv/dη=0,p=0 (the outlet pressure is unknown, but pressure is only defined relative to a reference point so we arbitrarily choose the outlet as a zero reference).
-    hr_out[:, 0, 0, :] = 0.0 #u bottom (inlet)
-    hr_out[:, 1, 0, :] = 1.0 #v bottom (inlet)
+    
     hr_out[:, 2, 0, :] = hr_out[:, 2, 1, :] #p bottom (inlet), deltaP between rows is 0, dp/deta = 0
     hr_out[:, 0, :, 0] = 0.0 #u left (wall)
     hr_out[:, 1, :, 0] = 0.0 #v left (wall)
@@ -127,6 +128,9 @@ def set_bcs(hr_out):
     hr_out[:, 0, -1, :] = hr_out[:, 0, -2, :] #u du/deta = 0
     hr_out[:, 1, -1, :] = hr_out[:, 1, -2, :] #v, dv/deta = 0
     hr_out[:, 2, -1, :] = 0.0 #p
+    hr_out[:, 0, 0, :] = 0.0 #u bottom (inlet)
+    hr_out[:, 1, 0, :] = 1.0 #v bottom (inlet)
+    # print('stop here')
     return hr_out
 
 # in loss-> in square space change bcs, then do derivatives, then convert to d/dx and calculate losses
@@ -136,7 +140,7 @@ def big_lossfunc(modelf, hr0_inf, Jinv, dxdxi, dxdeta, dydxi, dydeta, h, rho, mu
     modelf.train()
     hr_out = modelf(hr0_inf) # 1x3x77x49
     #set boundary conditions
-    hr_out = set_bcs(hr_out)
+    # hr_out = set_bcs(hr_out)
     # calculate derivatives
     dalldxi = ddxi(hr_out, h)
     d2alldxi2 = ddxi(dalldxi, h)
@@ -207,14 +211,14 @@ plt.figure()
 plt.pcolormesh(hfx, hfy, up2, cmap=cm.coolwarm, vmin=0.0, vmax=1.0)
 plt.title('Bicubic Upsampled Umag')
 plt.colorbar()
-plt.show()
-# save the upsampled image
 plt.savefig('bicubic_upsampled.png')
+plt.show()
+
 
 # %% Training
 hr0 = model.MyUpSample(lr_in) #upsampled to 77x49
 
-epochs = 10000
+epochs = 5000
 plotter_val = 500
 losses = []
 model.train()
@@ -234,8 +238,9 @@ plt.semilogy(losses)
 plt.title('Losses')
 plt.xlabel('Epochs')
 plt.ylabel('Training Loss')
-plt.show()
 plt.savefig('losses.png')
+plt.show()
+
 
 # Evaluate and plot the model
 model.eval()
@@ -246,8 +251,9 @@ plt.figure()
 plt.pcolormesh(hfx, hfy, np.sqrt(u**2 + v**2), cmap=cm.coolwarm, vmin=0.0, vmax=1.0)
 plt.colorbar()
 plt.title('Predicted Umag')
-plt.show()
 plt.savefig('predicted_umag.png')
+plt.show()
+
 
 #Actual umag
 hfu = hfdata[7, :, :]
@@ -256,6 +262,8 @@ plt.figure()
 plt.pcolormesh(hfx, hfy, np.sqrt(hfu**2 + hfv**2), cmap=cm.coolwarm, vmin=0.0, vmax=1.0)
 plt.colorbar()
 plt.title('Actual Umag')
-plt.show()
 plt.savefig('actual_umag.png')
+plt.show()
+
+
 # %%
