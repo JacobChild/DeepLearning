@@ -190,7 +190,7 @@ def big_lossfunc(modelf, hr0_inf, Jinv, dxdxi, dxdeta, dydxi, dydeta, h, rho, mu
 rho = 1.0
 mu = 0.01 
 # data setup 
-lr_in = torch.stack([torch.tensor(lfu), torch.tensor(lfv)]).unsqueeze(0).float() #  1x1x2x14x9
+lr_in = torch.stack([torch.tensor(lfu), torch.tensor(lfv)]).unsqueeze(0).float() #  1x2x14x9
 dydxi = torch.tensor(dydxi)
 dydeta = torch.tensor(dydeta)
 dxdxi = torch.tensor(dxdxi)
