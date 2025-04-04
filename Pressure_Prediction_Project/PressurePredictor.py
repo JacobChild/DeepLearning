@@ -34,10 +34,10 @@ lfu = lfdata[4, :, :]
 lfv = lfdata[5, :, :]
 
 # plot the low resolution data (like fig 3a except we are using MRI noise here rather than Gaussian noise so it will look a bit different)
-plt.figure()
-plt.pcolormesh(lfx, lfy, np.sqrt(lfu**2 + lfv**2), cmap=cm.coolwarm, vmin=0.0, vmax=1.0)
-plt.title('Low Res Umag')
-plt.colorbar()
+# plt.figure()
+# plt.pcolormesh(lfx, lfy, np.sqrt(lfu**2 + lfv**2), cmap=cm.coolwarm, vmin=0.0, vmax=1.0)
+# plt.title('Low Res Umag')
+# plt.colorbar()
 
 # load high resolution grids and mapping from low resolution to high resolution grid
 # hfdata = np.load("sr_hfdata.npy")
@@ -151,11 +151,13 @@ def big_lossfunc(modelf, hr0_inf, Jinv, dxdxi, dxdeta, dydxi, dydeta, h, rho, mu
     dvdxi = dalldxi[:, 1, :, :]
     d2vdxi2 = d2alldxi2[:, 1, :, :]
     dpdxi = dalldxi[:, 2, :, :]
+    d2pdxi2 = d2alldxi2[:, 2, :, :]
     dudeta = dalldeta[:, 0, :, :]
     d2udeta2 = d2alldeta2[:, 0, :, :]
     dvdeta = dalldeta[:, 1, :, :]
     d2vdeta2 = d2alldeta2[:, 1, :, :]
     dpdeta = dalldeta[:, 2, :, :]
+    d2pdeta2 = d2alldeta2[:, 2, :, :]
     
     # convert to d/dx and d/dy using equation 10a and 10b
     dudx = Jinv * (dudxi*dydeta - dudeta*dydxi)
@@ -168,6 +170,8 @@ def big_lossfunc(modelf, hr0_inf, Jinv, dxdxi, dxdeta, dydxi, dydeta, h, rho, mu
     d2vdy2 = Jinv * (d2vdeta2*dxdxi - d2vdxi2*dxdeta)
     dpdx = Jinv * (dpdxi*dydeta - dpdeta*dydxi)
     dpdy = Jinv * (dpdeta*dxdxi - dpdxi*dxdeta)
+    d2pdx2 = Jinv * (d2pdxi2*dydeta - d2pdeta2*dydxi)
+    d2pdy2 = Jinv * (d2pdeta2*dxdxi - d2pdxi2*dxdeta)
         
     # calculate losses
     # continuity equation
@@ -178,8 +182,9 @@ def big_lossfunc(modelf, hr0_inf, Jinv, dxdxi, dxdeta, dydxi, dydeta, h, rho, mu
     p = hr_out[:, 2, :, :]
     xmom_loss = torch.mean((u*dudx + v*dudy + dpdx/rho - nu * (d2udx2 + d2udy2))**2)
     ymom_loss = torch.mean((u*dvdx + v*dvdy + dpdy/rho - nu * (d2vdx2 + d2vdy2))**2)
+    p_loss = torch.mean((-rho*(d2udx2 + 2. * dudy*dvdx + d2vdy2) - d2pdx2 - d2pdy2)**2)
     
-    return cont_loss + xmom_loss + ymom_loss
+    return cont_loss + xmom_loss + ymom_loss + p_loss
     
     
     
@@ -201,18 +206,19 @@ n_outchan = 3 #u, v, p
 
 # model setup
 model = SuperRes(n_inchan, n_outchan, ny, nx)
+model = torch.load('SavedModels/org_nopress_model_epoch5000') #!make sure to update this when needed
 loss_fn = nn.MSELoss()
 optimizer = optim.Adam(model.parameters(), lr=1e-3)
 
-# %% Check plots, upsampled 
-up_umag = torch.sqrt(lr_in[:, 0, :, :]**2 + lr_in[:, 1, :, :]**2)
-up2 = model.MyUpSample(up_umag.unsqueeze(0)).squeeze(0).squeeze(0)
-plt.figure()
-plt.pcolormesh(hfx, hfy, up2, cmap=cm.coolwarm, vmin=0.0, vmax=1.0)
-plt.title('Bicubic Upsampled Umag')
-plt.colorbar()
-plt.savefig('bicubic_upsampled.png')
-plt.show()
+# Check plots, upsampled 
+# up_umag = torch.sqrt(lr_in[:, 0, :, :]**2 + lr_in[:, 1, :, :]**2)
+# up2 = model.MyUpSample(up_umag.unsqueeze(0)).squeeze(0).squeeze(0)
+# plt.figure()
+# plt.pcolormesh(hfx, hfy, up2, cmap=cm.coolwarm, vmin=0.0, vmax=1.0)
+# plt.title('Bicubic Upsampled Umag')
+# plt.colorbar()
+# # plt.savefig('bicubic_upsampled.png')
+# plt.show()
 
 
 # %% Training
@@ -232,13 +238,17 @@ for e in range(epochs):
         print(f'Epoch {e+1}/{epochs}, Loss: {loss.item()}')
 
 
-# %% Plot losses on a semilog
+# %% Post Processing
+#save the model 
+torch.save(model, 'SavedModels/org_nopress_plus_presspois1_model_epochplus5000')
+
+# Plot losses on a semilog
 plt.figure()
 plt.semilogy(losses)
 plt.title('Losses')
 plt.xlabel('Epochs')
 plt.ylabel('Training Loss')
-plt.savefig('losses.png')
+plt.savefig('Outputs/org_nopress_plus_presspois1_losses.png') #TODO: save on correct models etc
 plt.show()
 
 
@@ -247,22 +257,51 @@ model.eval()
 hr_test = model(hr0)
 u = hr_test[0, 0, :, :].detach().numpy()
 v = hr_test[0, 1, :, :].detach().numpy()
-plt.figure()
-plt.pcolormesh(hfx, hfy, np.sqrt(u**2 + v**2), cmap=cm.coolwarm, vmin=0.0, vmax=1.0)
-plt.colorbar()
-plt.title('Predicted Umag')
-plt.savefig('predicted_umag.png')
-plt.show()
+p = hr_test[0, 2, :, :].detach().numpy()
 
-
+#umag plots 
+fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+#Predicted umag
+umag = np.sqrt(u**2 + v**2)
+im1 = axes[0].pcolormesh(hfx, hfy, umag, cmap=cm.coolwarm, vmin=0.0, vmax=1.0)
+axes[0].set_title('Predicted Umag') 
+fig.colorbar(im1, ax=axes[0])
 #Actual umag
 hfu = hfdata[7, :, :]
 hfv = hfdata[8, :, :]
-plt.figure()
-plt.pcolormesh(hfx, hfy, np.sqrt(hfu**2 + hfv**2), cmap=cm.coolwarm, vmin=0.0, vmax=1.0)
-plt.colorbar()
-plt.title('Actual Umag')
-plt.savefig('actual_umag.png')
+hfp = hfdata[9, :, :]
+hf_umag = np.sqrt(hfu**2 + hfv**2)
+im2 = axes[1].pcolormesh(hfx, hfy, hf_umag, cmap=cm.coolwarm, vmin=0.0, vmax=1.0)
+axes[1].set_title('Actual Umag')
+fig.colorbar(im2, ax=axes[1])
+#Predicted umag error
+umag_error = (umag - hf_umag) / hf_umag #org_nopress_epoch5000 umag error was 0.48
+im3 = axes[2].pcolormesh(hfx, hfy, umag_error, cmap=cm.seismic, vmin=-1.0, vmax=1.0)
+axes[2].set_title('Umag Prediction Error (Avg: {:.2f})'.format(np.mean(umag_error)))
+fig.colorbar(im3, ax=axes[2])
+# Adjust layout and show the plot
+plt.tight_layout()
+plt.savefig('Outputs/org_nopress_plus_presspois1_epochplus5000_umag.png') #TODO: save on correct models etc
+plt.show()
+
+#Pressure Plots
+fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+# Predicted Pressure
+im1 = axes[0].pcolormesh(hfx, hfy, p, cmap=cm.coolwarm)
+axes[0].set_title('Predicted Pressure')
+fig.colorbar(im1, ax=axes[0])
+# Actual Pressure
+im2 = axes[1].pcolormesh(hfx, hfy, hfp, cmap=cm.coolwarm)
+axes[1].set_title('Actual Pressure')
+fig.colorbar(im2, ax=axes[1])
+# Pressure Prediction Error
+pressure_error = (p - hfp) / hfp #org_nopress_epoch5000_ pressure error was -0.66
+im3 = axes[2].pcolormesh(hfx, hfy, pressure_error, cmap=cm.seismic, vmin=-1.0, vmax=1.0)
+axes[2].set_title('Pressure Prediction Error (Avg: {:.2f})'.format(np.mean(pressure_error)))
+fig.colorbar(im3, ax=axes[2])
+# Adjust layout and show the plot
+plt.tight_layout()
+plt.savefig('Outputs/org_nopress_plus_presspois1_epochplus5000_pressure.png') #TODO: save on correct models etc
 plt.show()
 
 
