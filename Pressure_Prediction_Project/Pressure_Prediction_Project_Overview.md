@@ -46,10 +46,6 @@ Follow up goals include:
    
    5. Symbolic Regression? 
 
-
-
-
-
 ## Project Presentation
 
 ---
@@ -64,18 +60,15 @@ You will record a **10-minute max presentation** (15-minutes max for a group of 
 - **Motivation (15%)**
   - **5: Clearly defines the problem, provides context, and explains significance.**
   - 4: Mostly clear but missing some background details.
-  
-  
+
 - **Methods (25%)**
   - **5: Uses appropriate methods and best practices. Explains approach with technical rigor (e.g., model architecture, loss functions, training details).**
   - 4: Mostly solid work, but some minor methodological gaps.
-  
-  
+
 - **Results (40%)**
   - **5: Presents results with clear visualizations, proper metrics, and insightful interpretation. Clearly meets or exceeds scope.**
   - 4: Good results, but missing some explanation or comparisons.
-  
-  
+
 - **Presentation (20%)**
   - **5: Presentation is well-structured, logically organized, and easy to follow.**
   - 4: Mostly clear, but some minor issues.
