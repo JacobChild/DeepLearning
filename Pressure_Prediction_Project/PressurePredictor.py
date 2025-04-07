@@ -208,7 +208,7 @@ n_outchan = 3 #u, v, p
 model = SuperRes(n_inchan, n_outchan, ny, nx)
 model = torch.load('SavedModels/org_nopress_model_epoch5000') #!make sure to update this when needed
 loss_fn = nn.MSELoss()
-optimizer = optim.Adam(model.parameters(), lr=1e-3)
+optimizer = optim.Adam(model.parameters(), lr=1e-5)
 
 # Check plots, upsampled 
 # up_umag = torch.sqrt(lr_in[:, 0, :, :]**2 + lr_in[:, 1, :, :]**2)
@@ -240,7 +240,7 @@ for e in range(epochs):
 
 # %% Post Processing
 #save the model 
-torch.save(model, 'SavedModels/org_nopress_plus_presspois1_model_epochplus5000')
+# torch.save(model, 'SavedModels/org_nopress_plus_presspois1_model_epochplus5000')
 
 # Plot losses on a semilog
 plt.figure()
@@ -248,7 +248,7 @@ plt.semilogy(losses)
 plt.title('Losses')
 plt.xlabel('Epochs')
 plt.ylabel('Training Loss')
-plt.savefig('Outputs/org_nopress_plus_presspois1_losses.png') #TODO: save on correct models etc
+# plt.savefig('Outputs/org_nopress_plus_presspois1_losses.png') #TODO: save on correct models etc
 plt.show()
 
 
@@ -281,7 +281,7 @@ axes[2].set_title('Umag Prediction Error (Avg: {:.2f})'.format(np.mean(umag_erro
 fig.colorbar(im3, ax=axes[2])
 # Adjust layout and show the plot
 plt.tight_layout()
-plt.savefig('Outputs/org_nopress_plus_presspois1_epochplus5000_umag.png') #TODO: save on correct models etc
+# plt.savefig('Outputs/org_nopress_plus_presspois1_epochplus5000_umag.png') #TODO: save on correct models etc
 plt.show()
 
 #Pressure Plots
@@ -301,7 +301,7 @@ axes[2].set_title('Pressure Prediction Error (Avg: {:.2f})'.format(np.mean(press
 fig.colorbar(im3, ax=axes[2])
 # Adjust layout and show the plot
 plt.tight_layout()
-plt.savefig('Outputs/org_nopress_plus_presspois1_epochplus5000_pressure.png') #TODO: save on correct models etc
+# plt.savefig('Outputs/org_nopress_plus_presspois1_epochplus5000_pressure.png') #TODO: save on correct models etc
 plt.show()
 
 
