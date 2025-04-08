@@ -1,64 +1,20 @@
-#SuperRes.py
+#PressurePredictor.py
 #Jacob Child
-#March 12th, 2025
 
+#Pressure Prediction Project: I previously used HW8, the SuperRes homework to predict a pressure field. It kind of helped the Umag field, but the Pressure field is still quite far off. HW 8 was learning to correct the velocity field and predict a pressure field. I am now going to train a CNN/PINN to just do the pressure field. Instead of boundary conditions I am going to give it collocation points so it is kind of like correllating pitot probe data if I was using data from PIV. 
 
-#%% Packages 
-#! .venv\Scripts\Activate.ps1
+#%% Packages
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib import patheffects
 from matplotlib import cm
 import torch 
 from torch import nn
 import torch.optim as optim
-# import torch.optim.lr_scheduler as lr_scheduler
-
-#%% Load Data (Dr. Ning's Code)
-# load low resolution data, which serves as input to our model
-l1f1 = 'Data/sr_lfdata.npy'
-l2f1 = 'CNNForSuperResCFDwphysics_HW8/Data/sr_lfdata.npy'
-l1f2 = 'Data/sr_hfdata.npy'
-l2f2 = 'CNNForSuperResCFDwphysics_HW8/Data/sr_hfdata.npy'
-#try and catch for loading data
-try:
-    lfdata = np.load(l1f1)
-    hfdata = np.load(l1f2)
-except FileNotFoundError:
-    lfdata = np.load(l2f1)
-    hfdata = np.load(l2f2)
-        
-# lfdata = np.load("sr_lfdata.npy")
-lfx = lfdata[0, :, :]  # size 14 x 9  (height x width)
-lfy = lfdata[1, :, :]
-lfu = lfdata[4, :, :]
-lfv = lfdata[5, :, :]
-
-# plot the low resolution data (like fig 3a except we are using MRI noise here rather than Gaussian noise so it will look a bit different)
-# plt.figure()
-# plt.pcolormesh(lfx, lfy, np.sqrt(lfu**2 + lfv**2), cmap=cm.coolwarm, vmin=0.0, vmax=1.0)
-# plt.title('Low Res Umag')
-# plt.colorbar()
-
-# load high resolution grids and mapping from low resolution to high resolution grid
-# hfdata = np.load("sr_hfdata.npy")
-Jinv = hfdata[0, :, :]  # size 77 x 49 (height x width)
-dxdxi = hfdata[1, :, :]
-dxdeta = hfdata[2, :, :]
-dydxi = hfdata[3, :, :]
-dydeta = hfdata[4, :, :]
-hfx = hfdata[5, :, :]
-hfy = hfdata[6, :, :]
-
-
-ny, nx = hfx.shape  #(77 x 49)
-h = 0.01  # grid spacing in high fidelity (needed for derivatives)
-
-plt.show()
-
 # %% Define the model
-class SuperRes(nn.Module):
+class PressurePredictor(nn.Module):
     def __init__(self, n_inchan, n_outchan, ny_up, nx_up):
-        super(SuperRes, self).__init__()
+        super(PressurePredictor, self).__init__()
         
         self.MySmallUpSample = nn.Upsample(size=(ny_up-2, nx_up-2), mode='bicubic') # expects batch x channels x height x width
         self.MyUpSample = nn.Upsample(size=(ny_up, nx_up), mode='bicubic') # expects batch x channels x height x width
@@ -88,14 +44,14 @@ class SuperRes(nn.Module):
                     nn.init.constant_(layer.bias, 0.0)
         
     def forward(self, x):
-        return set_bcs(self.conv_layers(x))
+        return self.conv_layers(x)
 
 
 # see https://en.wikipedia.org/wiki/Finite_difference_coefficient
 # or https://web.media.mit.edu/~crtaylor/calculator.html
 
 # f should be a tensor of size: nbatch x nchannels x height (y or eta) x width (x or xi)
-# This is written in a general way if one had more data, but for this case there is only 1 data sample, and there are only a few channels it might be clearer to you to separate the channels out into separate variables, in which case the below could be simplified (i.e., you remove the first two dimensions from everything so that input is just height x width if you desire).
+# This is written in a general way if one had more data, but for this case there is only 1 data sample, and there are only a few channels it might be clearer to you to separate the channels out into separate variables, in which case the below could be simplified (i.e., you remove the first two dimensions from everything so that input is just height x width if you desire). --Dr. Ning's derivative code
 def ddxi(f, h):
     # 5-pt stencil
     dfdx_central = (f[:, :, :, 0:-4] - 8*f[:, :, :, 1:-3] + 8*f[:, :, :, 3:-1] - f[:, :, :, 4:]) / (12*h)
@@ -114,37 +70,20 @@ def ddeta(f, h):
 
     return torch.cat((dfdy_bot, dfdy_central, dfdy_top), dim=2)
 
-def set_bcs(hr_out):
-    # bc's
-    #The bottom edge (η = 0) is inflow with conditions: u=0,v=1,dp/dη=0. So if u, v, p were tensors of size neta x nxi we would set: u[0, :] = 0; v[0, :] = 1; p[0, :] = p[1, :]. The latter forces the pressure gradient to be zero at the inlet (which just means it is at some unknown constant pressure). The left and right edges are walls with conditions: u=0,v=0,dp/dξ=0 (the latter is a result from incompressible boundary layer theory). At the top (outlet) we set du/dη=0,dv/dη=0,p=0 (the outlet pressure is unknown, but pressure is only defined relative to a reference point so we arbitrarily choose the outlet as a zero reference).
-    
-    hr_out[:, 2, 0, :] = hr_out[:, 2, 1, :] #p bottom (inlet), deltaP between rows is 0, dp/deta = 0
-    hr_out[:, 0, :, 0] = 0.0 #u left (wall)
-    hr_out[:, 1, :, 0] = 0.0 #v left (wall)
-    hr_out[:, 2, :, 0] = hr_out[:, 2, :, 1] #p left (wall), dp/dxi = 0
-    hr_out[:, 0, :, -1] = 0.0 #u right (wall)
-    hr_out[:, 1, :, -1] = 0.0 #v right (wall)
-    hr_out[:, 2, :, -1] = hr_out[:, 2, :, -2] #p right (wall), dp/dxi = 0
-    hr_out[:, 0, -1, :] = hr_out[:, 0, -2, :] #u du/deta = 0
-    hr_out[:, 1, -1, :] = hr_out[:, 1, -2, :] #v, dv/deta = 0
-    hr_out[:, 2, -1, :] = 0.0 #p
-    hr_out[:, 0, 0, :] = 0.0 #u bottom (inlet)
-    hr_out[:, 1, 0, :] = 1.0 #v bottom (inlet)
-    # print('stop here')
-    return hr_out
-
 # in loss-> in square space change bcs, then do derivatives, then convert to d/dx and calculate losses
-def big_lossfunc(modelf, hr0_inf, Jinv, dxdxi, dxdeta, dydxi, dydeta, h, rho, mu):
+def big_lossfunc(modelf, hr0_inf, Jinv, dxdxi, dxdeta, dydxi, dydeta, h, rho, mu, col_l, col_r, col_t, col_b): #for presspois3 was col_v, col_h (they were the pitot probe data in the t)
     nu = mu
     # get the model output
     modelf.train()
-    hr_out = modelf(hr0_inf) # 1x3x77x49
-    #set boundary conditions
-    # hr_out = set_bcs(hr_out)
+    p_out = modelf(hr0_inf) # 1x1x77x49
+
+    # stack the output with the input
+    uvp_stacked = torch.cat((hr0_inf, p_out), dim=1) # 1x3x77x49
+    
     # calculate derivatives
-    dalldxi = ddxi(hr_out, h)
+    dalldxi = ddxi(uvp_stacked, h)
     d2alldxi2 = ddxi(dalldxi, h)
-    dalldeta = ddeta(hr_out, h)
+    dalldeta = ddeta(uvp_stacked, h)
     d2alldeta2 = ddeta(dalldeta, h)
     dudxi = dalldxi[:, 0, :, :]
     d2udxi2 = d2alldxi2[:, 0, :, :]
@@ -174,73 +113,107 @@ def big_lossfunc(modelf, hr0_inf, Jinv, dxdxi, dxdeta, dydxi, dydeta, h, rho, mu
     d2pdy2 = Jinv * (d2pdeta2*dxdxi - d2pdxi2*dxdeta)
         
     # calculate losses
-    # continuity equation
-    cont_loss = torch.mean((dudx + dvdy)**2)
+    # pitot probe loss
+    # vertical_loss = torch.mean((p_out[0, 0, vert_col, 24] - col_v)**2) # 24 is the centerish of the domain in x
+    # horizontal_loss = torch.mean((p_out[0, 0, 38, horz_col] - col_h)**2) # 38 is the centerish of the domain in y
+    left_loss = torch.mean((p_out[0, 0, vert_col2, 0] - col_l)**2) # left boundary
+    right_loss = torch.mean((p_out[0, 0, vert_col2, -1] - col_r)**2) # right boundary
+    top_loss = torch.mean((p_out[0, 0, 0, horz_col2] - col_t)**2) # top boundary
+    bottom_loss = torch.mean((p_out[0, 0, -1, horz_col2] - col_b)**2) # bottom boundary
     # momentum equations
-    u = hr_out[:, 0, :, :]
-    v = hr_out[:, 1, :, :]
-    p = hr_out[:, 2, :, :]
+    u = uvp_stacked[:, 0, :, :]
+    v = uvp_stacked[:, 1, :, :]
     xmom_loss = torch.mean((u*dudx + v*dudy + dpdx/rho - nu * (d2udx2 + d2udy2))**2)
     ymom_loss = torch.mean((u*dvdx + v*dvdy + dpdy/rho - nu * (d2vdx2 + d2vdy2))**2)
     p_loss = torch.mean((-rho*(d2udx2 + 2. * dudy*dvdx + d2vdy2) - d2pdx2 - d2pdy2)**2)
-    
-    return cont_loss + xmom_loss + ymom_loss + p_loss
-    
-    
-    
+    # print('rounded losses: ', vertical_loss.item(), horizontal_loss.item(), xmom_loss.item(), ymom_loss.item(), p_loss.item())
+    return 100*left_loss + 100*right_loss + 100*top_loss + 100*bottom_loss + xmom_loss + 0.1*ymom_loss + 0.001*p_loss #100*vertical_loss + 100*horizontal_loss + xmom_loss + 0.1*ymom_loss + 0.001*p_loss
+
+#%% Load Data (Mostly Dr. Ning's Code)
+# load high resolution data, which serves as input to our model
+l1f2 = 'Data/sr_hfdata.npy'
+l2f2 = 'Pressure_Prediction_Project/Data/sr_hfdata.npy'
+#try and catch for loading data
+try:
+    hfdata = np.load(l1f2)
+except FileNotFoundError:
+    hfdata = np.load(l2f2)
+        
+
+# load high resolution grids and mapping from low resolution to high resolution grid
+# hfdata = np.load("sr_hfdata.npy")
+Jinv = hfdata[0, :, :]  # size 77 x 49 (height x width)
+dxdxi = hfdata[1, :, :]
+dxdeta = hfdata[2, :, :]
+dydxi = hfdata[3, :, :]
+dydeta = hfdata[4, :, :]
+hfx = hfdata[5, :, :]
+hfy = hfdata[6, :, :]
+hfu = hfdata[7, :, :]
+hfv = hfdata[8, :, :]
+hfp_compare = hfdata[9, :, :]
 
 
-# %% Setup
+ny, nx = hfx.shape  #(77 x 49)
+h = 0.01  # grid spacing in high fidelity (needed for derivatives)
 # givens
 rho = 1.0
 mu = 0.01 
 # data setup 
-lr_in = torch.stack([torch.tensor(lfu), torch.tensor(lfv)]).unsqueeze(0).float() #  1x2x14x9
+hr_in = torch.stack([torch.tensor(hfu), torch.tensor(hfv)]).unsqueeze(0).float() #  1x2x77x49
 dydxi = torch.tensor(dydxi)
 dydeta = torch.tensor(dydeta)
 dxdxi = torch.tensor(dxdxi)
 dxdeta = torch.tensor(dxdeta)
 Jinv = torch.tensor(Jinv)
-n_inchan = lr_in.shape[1]
-n_outchan = 3 #u, v, p
+n_inchan = hr_in.shape[1]
+n_outchan = 1 # p
 
+#%% Collocation/Pitot Probe Points
+n_col = 10 # number of collocation points
+# do 10 down the center of the domain and 10 across the center of the domain
+vert_col = np.linspace(0, ny-1, n_col).astype(int) # 10 points down the center of the domain
+horz_col = np.linspace(0, nx-1, n_col).astype(int) # 10 points across the center of the domain
+pitot_probe_vert = hfp_compare[vert_col, 24] # 38 is the centerish of the domain in y
+pitot_probe_horz = hfp_compare[38, horz_col] # 24 is the centerish of the domain in x
+pitot_probe_vert = torch.tensor(pitot_probe_vert).float()
+pitot_probe_horz = torch.tensor(pitot_probe_horz).float()
+
+#Now try boundary collocation points, ie, how important are the boundaries to the model? to make it fair, only 5 points on each side
+vert_col2 = np.linspace(0, ny-1, 5).astype(int) # 5 points down the left and right boundaries
+horz_col2 = np.linspace(0, nx-1, 5).astype(int) # 5 points across the top and bottom boundaries
+pitot_probe_left = hfp_compare[vert_col2, 0] # left boundary
+pitot_probe_right = hfp_compare[vert_col2, -1] # right boundary
+pitot_probe_top = hfp_compare[0, horz_col2] # top boundary
+pitot_probe_bottom = hfp_compare[-1, horz_col2] # bottom boundary
+pitot_probe_left = torch.tensor(pitot_probe_left).float()
+pitot_probe_right = torch.tensor(pitot_probe_right).float()
+pitot_probe_top = torch.tensor(pitot_probe_top).float()
+pitot_probe_bottom = torch.tensor(pitot_probe_bottom).float()
+
+# %% Model Setup
 # model setup
-model = SuperRes(n_inchan, n_outchan, ny, nx)
-model = torch.load('SavedModels/org_nopress_model_epoch5000') #!make sure to update this when needed
+model = PressurePredictor(n_inchan, n_outchan, ny, nx)
 loss_fn = nn.MSELoss()
-optimizer = optim.Adam(model.parameters(), lr=1e-5)
+optimizer = optim.Adam(model.parameters(), lr=1e-4)
 
-# Check plots, upsampled 
-# up_umag = torch.sqrt(lr_in[:, 0, :, :]**2 + lr_in[:, 1, :, :]**2)
-# up2 = model.MyUpSample(up_umag.unsqueeze(0)).squeeze(0).squeeze(0)
-# plt.figure()
-# plt.pcolormesh(hfx, hfy, up2, cmap=cm.coolwarm, vmin=0.0, vmax=1.0)
-# plt.title('Bicubic Upsampled Umag')
-# plt.colorbar()
-# # plt.savefig('bicubic_upsampled.png')
-# plt.show()
-
-
-# %% Training
-hr0 = model.MyUpSample(lr_in) #upsampled to 77x49
-
+#%% Training Loop
 epochs = 5000
 plotter_val = 500
 losses = []
 model.train()
 for e in range(epochs):
     optimizer.zero_grad()
-    loss = big_lossfunc(model, hr0, Jinv, dxdxi, dxdeta, dydxi, dydeta, h, rho, mu)
+    loss = big_lossfunc(model, hr_in, Jinv, dxdxi, dxdeta, dydxi, dydeta, h, rho, mu, pitot_probe_left, pitot_probe_right, pitot_probe_top, pitot_probe_bottom)
     loss.backward()
     optimizer.step()
     losses.append(loss.item())
     if (e+1)%plotter_val == 0:
         print(f'Epoch {e+1}/{epochs}, Loss: {loss.item()}')
 
-
-# %% Post Processing
+# %% Plotting / Evaluating 
 #save the model 
-# torch.save(model, 'SavedModels/org_nopress_plus_presspois1_model_epochplus5000')
+# torch.save(model, 'SavedModels/presspois4_model_epoch10000') #TODO: save on correct models etc
 
 # Plot losses on a semilog
 plt.figure()
@@ -248,61 +221,55 @@ plt.semilogy(losses)
 plt.title('Losses')
 plt.xlabel('Epochs')
 plt.ylabel('Training Loss')
-# plt.savefig('Outputs/org_nopress_plus_presspois1_losses.png') #TODO: save on correct models etc
+# plt.savefig('Outputs/presspois4_losses_epoch10000.png') #TODO: save on correct models etc
 plt.show()
 
 
 # Evaluate and plot the model
 model.eval()
-hr_test = model(hr0)
-u = hr_test[0, 0, :, :].detach().numpy()
-v = hr_test[0, 1, :, :].detach().numpy()
-p = hr_test[0, 2, :, :].detach().numpy()
-
-#umag plots 
-fig, axes = plt.subplots(1, 3, figsize=(18, 6))
-#Predicted umag
-umag = np.sqrt(u**2 + v**2)
-im1 = axes[0].pcolormesh(hfx, hfy, umag, cmap=cm.coolwarm, vmin=0.0, vmax=1.0)
-axes[0].set_title('Predicted Umag') 
-fig.colorbar(im1, ax=axes[0])
-#Actual umag
-hfu = hfdata[7, :, :]
-hfv = hfdata[8, :, :]
-hfp = hfdata[9, :, :]
-hf_umag = np.sqrt(hfu**2 + hfv**2)
-im2 = axes[1].pcolormesh(hfx, hfy, hf_umag, cmap=cm.coolwarm, vmin=0.0, vmax=1.0)
-axes[1].set_title('Actual Umag')
-fig.colorbar(im2, ax=axes[1])
-#Predicted umag error
-umag_error = (umag - hf_umag) / hf_umag #org_nopress_epoch5000 umag error was 0.48
-im3 = axes[2].pcolormesh(hfx, hfy, umag_error, cmap=cm.seismic, vmin=-1.0, vmax=1.0)
-axes[2].set_title('Umag Prediction Error (Avg: {:.2f})'.format(np.mean(umag_error)))
-fig.colorbar(im3, ax=axes[2])
-# Adjust layout and show the plot
-plt.tight_layout()
-# plt.savefig('Outputs/org_nopress_plus_presspois1_epochplus5000_umag.png') #TODO: save on correct models etc
-plt.show()
-
+p_test = model(hr_in)
+p_test = p_test.squeeze(0).squeeze(0) # remove batch and channel dimensions
 #Pressure Plots
 fig, axes = plt.subplots(1, 3, figsize=(18, 6))
 # Predicted Pressure
-im1 = axes[0].pcolormesh(hfx, hfy, p, cmap=cm.coolwarm)
+im1 = axes[0].pcolormesh(hfx, hfy, p_test.detach().numpy(), cmap=cm.coolwarm)
 axes[0].set_title('Predicted Pressure')
 fig.colorbar(im1, ax=axes[0])
+# Add collocation points
+# axes[0].plot(hfx[vert_col, 24], hfy[vert_col, 24], 'x', color='white', path_effects=[patheffects.withStroke(linewidth=3, foreground='black')])
+# axes[0].plot(hfx[38, horz_col], hfy[38, horz_col], 'x', color='white', path_effects=[patheffects.withStroke(linewidth=3, foreground='black')])
+axes[0].plot(hfx[vert_col2, 0], hfy[vert_col2, 0], 'x', color='white', path_effects=[patheffects.withStroke(linewidth=3, foreground='black')])
+axes[0].plot(hfx[vert_col2, -1], hfy[vert_col2, -1], 'x', color='white', path_effects=[patheffects.withStroke(linewidth=3, foreground='black')])
+axes[0].plot(hfx[0, horz_col2], hfy[0, horz_col2], 'x', color='white', path_effects=[patheffects.withStroke(linewidth=3, foreground='black')])
+axes[0].plot(hfx[-1, horz_col2], hfy[-1, horz_col2], 'x', color='white', path_effects=[patheffects.withStroke(linewidth=3, foreground='black')])
 # Actual Pressure
-im2 = axes[1].pcolormesh(hfx, hfy, hfp, cmap=cm.coolwarm)
+im2 = axes[1].pcolormesh(hfx, hfy, hfp_compare, cmap=cm.coolwarm)
 axes[1].set_title('Actual Pressure')
 fig.colorbar(im2, ax=axes[1])
+# Add collocation points
+# axes[1].plot(hfx[vert_col, 24], hfy[vert_col, 24], 'x', color='white', path_effects=[patheffects.withStroke(linewidth=3, foreground='black')])
+# axes[1].plot(hfx[38, horz_col], hfy[38, horz_col], 'x', color='white', path_effects=[patheffects.withStroke(linewidth=3, foreground='black')])
+axes[1].plot(hfx[vert_col2, 0], hfy[vert_col2, 0], 'x', color='white', path_effects=[patheffects.withStroke(linewidth=3, foreground='black')])
+axes[1].plot(hfx[vert_col2, -1], hfy[vert_col2, -1], 'x', color='white', path_effects=[patheffects.withStroke(linewidth=3, foreground='black')])
+axes[1].plot(hfx[0, horz_col2], hfy[0, horz_col2], 'x', color='white', path_effects=[patheffects.withStroke(linewidth=3, foreground='black')])
+axes[1].plot(hfx[-1, horz_col2], hfy[-1, horz_col2], 'x', color='white', path_effects=[patheffects.withStroke(linewidth=3, foreground='black')])
 # Pressure Prediction Error
-pressure_error = (p - hfp) / hfp #org_nopress_epoch5000_ pressure error was -0.66
+pressure_error = (p_test.detach().numpy() - hfp_compare) / hfp_compare 
 im3 = axes[2].pcolormesh(hfx, hfy, pressure_error, cmap=cm.seismic, vmin=-1.0, vmax=1.0)
-axes[2].set_title('Pressure Prediction Error (Avg: {:.2f})'.format(np.mean(pressure_error)))
+axes[2].set_title(f'Pressure Prediction Error (Avg: {np.mean(np.abs(pressure_error)):.2f}, Median: {np.median(np.abs(pressure_error)):.2f})')
 fig.colorbar(im3, ax=axes[2])
+# Add collocation points
+# axes[2].plot(hfx[vert_col, 24], hfy[vert_col, 24], 'x', color='white', label='Collocation Points', path_effects=[patheffects.withStroke(linewidth=3, foreground='black')])
+# axes[2].plot(hfx[38, horz_col], hfy[38, horz_col], 'x', color='white', path_effects=[patheffects.withStroke(linewidth=3, foreground='black')])
+axes[2].plot(hfx[vert_col2, 0], hfy[vert_col2, 0], 'x', color='white', label='Collocation Points (10ct)', path_effects=[patheffects.withStroke(linewidth=3, foreground='black')])
+axes[2].plot(hfx[vert_col2, -1], hfy[vert_col2, -1], 'x', color='white', path_effects=[patheffects.withStroke(linewidth=3, foreground='black')])
+axes[2].plot(hfx[0, horz_col2], hfy[0, horz_col2], 'x', color='white', path_effects=[patheffects.withStroke(linewidth=3, foreground='black')])
+axes[2].plot(hfx[-1, horz_col2], hfy[-1, horz_col2], 'x', color='white', path_effects=[patheffects.withStroke(linewidth=3, foreground='black')])
 # Adjust layout and show the plot
+# Add a single legend for all subplots (external)
+fig.legend(loc='center left', bbox_to_anchor=(1.0, 0.5), ncol=1)
 plt.tight_layout()
-# plt.savefig('Outputs/org_nopress_plus_presspois1_epochplus5000_pressure.png') #TODO: save on correct models etc
+# plt.savefig('Outputs/presspois4_epoch10000_pressure.png') #TODO: save on correct models etc
 plt.show()
-
 
 # %%
