@@ -49,6 +49,18 @@ Follow up goals include:
    1. Use the same equations and methodology on a new 2D channel flow and see if I can predict that, train at different Reynolds numbers etc
    2. Use the same equations amd methodology on Nathan Welker's PIV data and see if I can predict reasonable pressure fields -> I need to see if he has pressure fields I can compare to
    3. Stick with homework 8, but now apply symbolic regression (or Kolmogorov Arnold?) to see if I can figure out what equations are used to predict the pressure field. This would probably require a standalone pressure prediction network instead of one that is also learning upscaling of u and v too.
+   
+   ANS: I chose to go with option 2, working with PIV data, it is the most motivated/easiest story to tell.
+   
+   Steps:
+   
+   1. Run on Side View PIV Veloc data, compare to his numerical prediction, and to the CFD pressure field
+   
+   2. Run on the Wake View PIV Veloc data, same comparison
+   
+   3. Prep for presentation, make sure all the images I want I have etc, make slides
+   
+   4. Record Video!
 
 ## Project Presentation
 
