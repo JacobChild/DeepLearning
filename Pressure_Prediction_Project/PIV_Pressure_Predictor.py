@@ -8,8 +8,6 @@
 #%% Import Needed Packages
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib import patheffects
-from matplotlib import cm
 import torch 
 from torch import nn
 import torch.optim as optim
@@ -30,6 +28,38 @@ class PressurePredictor(nn.Module):
             nn.Conv2d(64, 32, 5, padding=2),
             nn.ReLU(),
             nn.Conv2d(32, n_outchan, 5, padding=2)
+        )
+        
+        #AI recommened weight initalization based off of the paper
+        self.init_weights()
+
+    def init_weights(self):
+        for layer in self.modules():
+            if isinstance(layer := layer, nn.Conv2d):
+                C_in = layer.in_channels
+                bound = (1 / (25 * C_in))**0.5
+                nn.init.uniform_(layer.weight, -bound, bound)
+                if layer.bias is not None:
+                    nn.init.constant_(layer.bias, 0.0)
+        
+    def forward(self, x):
+        return self.conv_layers(x)
+    
+class BigPressurePredictor(nn.Module):
+    def __init__(self, n_inchan, n_outchan, ny_up, nx_up):
+        super(BigPressurePredictor, self).__init__()
+        m = 2
+        
+        self.conv_layers = nn.Sequential(
+            nn.Conv2d(n_inchan, 16*m, 5, padding=2),
+            nn.ReLU(),
+            nn.Conv2d(16*m, 32*m, 5, padding=2),
+            nn.ReLU(),
+            nn.Conv2d(32*m, 64*m, 5, padding=2),
+            nn.ReLU(),
+            nn.Conv2d(64*m, 32*m, 5, padding=2),
+            nn.ReLU(),
+            nn.Conv2d(32*m, n_outchan, 5, padding=2)
         )
         
         #AI recommened weight initalization based off of the paper
@@ -159,12 +189,13 @@ def big_lossfunc(modelf, velocsf, hf, rho, mu, comp_indf, pitot_pressf, loss_fnf
     # momentum equations
     u = uvp_stacked[:, 0, :, :]
     v = uvp_stacked[:, 1, :, :]
+    cont_loss = torch.mean((dudx + dudy)**2) #continuity equation
     xmom_loss = torch.mean((u*dudx + v*dudy + dpdx/rho - mu * (d2udx2 + d2udy2))**2)
     ymom_loss = torch.mean((u*dvdx + v*dvdy + dpdy/rho - mu * (d2vdx2 + d2vdy2))**2)
     p_loss = torch.mean((-rho*(d2udx2 + 2. * dudy*dvdx + d2vdy2) - d2pdx2 - d2pdy2)**2)
-    if print_flag:
+    if print_flag: 
         print_flag = False
-        print('pitot_loss: ', pitot_loss.item(),'xmom_loss:', xmom_loss.item(), 'ymom_loss:', ymom_loss.item(), 'p_loss:', p_loss.item())
+        print('pitot_loss: ', pitot_loss.item(),'xmom_loss:', xmom_loss.item(), 'ymom_loss:', ymom_loss.item(), 'p_loss:', p_loss.item(), 'cont_loss:', cont_loss.item())
     return 100000*pitot_loss + xmom_loss + ymom_loss + p_loss/10000 #100*vertical_loss + 100*horizontal_loss + xmom_loss + 0.1*ymom_loss + 0.001*p_loss
 
 # %% Data Loading
@@ -229,17 +260,23 @@ plt.scatter(sv_cfd_reduced[:,0], sv_cfd_reduced[:,2], c=sv_cfd_reduced[:,-1], cm
 plt.colorbar(label='Pressure (Pa)')
 plt.show()
 
-# plot sv_nw_pred pressure data #TODO: Ask Nathan welker what orientation this should be in, ANS: I need to rotate and flip
+# plot sv_nw_pred pressure data #TODO: Ask Nathan welker what orientation this should be in, ANS: I need to swap x and y (done), then flip horizontally and vertically
 sv_nw_x = np.linspace(xmin, xmax, sv_nw_pred.shape[0]) #112 points in x direction
 sv_nw_y = np.linspace(zmin, zmax, sv_nw_pred.shape[1]) #154 points in y direction
 sv_nw_x, sv_nw_y = np.meshgrid(sv_nw_x, sv_nw_y) #create a meshgrid for the pressure data
-sv_nw_pred_transposed = sv_nw_pred.T #transpose the pressure data to match the meshgrid
-plt.figure(figsize=(12,8))
-plt.title('Side View PIV Pressure Data')
+# Flip the data over the horizontal axis (upside down)
+sv_nw_pred_flipped_horizontally = np.flipud(sv_nw_pred)
+# Flip the data over the vertical axis (left to right)
+sv_nw_pred_flipped = np.fliplr(sv_nw_pred_flipped_horizontally)
+# Transpose the flipped data to match the meshgrid
+sv_nw_pred_transposed = sv_nw_pred_flipped.T
+# Plot the flipped and transposed data
+plt.figure(figsize=(12, 8))
+plt.title('Side View PIV Pressure Data (Flipped)')
 plt.xlabel('x (mm)')
 plt.ylabel('y (mm)')
-plt.scatter(sv_nw_x, sv_nw_y, c=sv_nw_pred_transposed.flatten(), cmap='jet')
-plt.colorbar(label='Pressure (Pa)') 
+plt.scatter(sv_nw_y, sv_nw_x, c=sv_nw_pred_transposed.flatten(), cmap='jet')
+plt.colorbar(label='Pressure (Pa)')
 plt.show()
 
 #%% ######### SIDE VIEW FIRST ##########
@@ -337,14 +374,14 @@ num_x = sv_just_veloc.shape[3] #number of x points (172)
 
 model = PressurePredictor(in_chan, out_chan, num_y, num_x) #1 x 2 x num_y (130) x num_x (172) tensor
 loss_fn = nn.MSELoss()
-optimizer = optim.Adam(model.parameters(), lr=1e-3)
+optimizer = optim.Adam(model.parameters(), lr=1e-4)
 
 #%% Training Loop
 rho = 1.225 #kg/m^3
 mu = 1.823e-5 #Pa*s at apx 72deg F
 h = (torch.max(x_grid) - torch.min(x_grid)) / num_x #grid spacing in x direction (mm)
 h = h * 0.001 #convert to m
-epochs = 5000
+epochs = 10000
 plotter_val = 500
 losses = []
 model.train()
@@ -359,10 +396,10 @@ for e in range(epochs):
         big_lossfunc(model, sv_just_veloc, h, rho, mu, valid_indices, pitot_pressures_reduced, loss_fn, print_flag=True)
 
 
-# %% Plotting / Evaluating 
+ # %% Plotting / Evaluating 
 #TODO: 4 things are being saved, comment or uncomment **ALL** of them
 #save the model 
-# torch.save(model, 'SavedModels/PIV_sv_init2_epoch5000') #TODO: save on correct models etc
+# torch.save(model, 'SavedModels/PIV_sv_epoch10000') #TODO: save on correct models etc
 
 # Plot losses on a semilog
 plt.figure()
@@ -370,7 +407,7 @@ plt.semilogy(losses)
 plt.title('Losses')
 plt.xlabel('Epochs')
 plt.ylabel('Training Loss')
-# plt.savefig('Outputs/PIV_sv_init2_losses_epoch5000.png') #TODO: save on correct models etc
+# plt.savefig('Outputs/PIV_sv_losses_epoch10000.png') #TODO: save on correct models etc
 plt.show()
 
 #Evaluate the model
@@ -380,6 +417,7 @@ p_out_sv = p_out_sv.squeeze(0).squeeze(0) #remove the batch and channel dimensio
 p_out_sv_np = p_out_sv.detach().numpy() #convert to numpy for plotting
 max_p_sv = torch.max(p_out_sv) #get the max pressure value
 min_p_sv = torch.min(p_out_sv) #get the min pressure value
+min_p_sv = -30
 
 # Create side-by-side plots
 fig, axes = plt.subplots(1, 2, figsize=(16, 8))
@@ -391,11 +429,17 @@ sc1 = axes[0].scatter(
     x_grid.flatten(), y_grid.flatten(),
     c=p_out_sv_np.flatten(), cmap='jet', vmin=min_p_sv, vmax=max_p_sv
 )
-fig.colorbar(sc1, ax=axes[0], label='Pressure (Pa)')
+# fig.colorbar(sc1, ax=axes[0], label='Pressure (Pa)')
+# #Plot Nathan Welker's pressure data
+# axes[1].set_title('Numerically Predicted Pressure Field')
+# axes[1].set_xlabel('x (mm)')
+# # axes[1].set_ylabel('y (mm)')
+# sc1 = axes[1].scatter(sv_nw_y, sv_nw_x, c=sv_nw_pred_transposed.flatten(), cmap='jet', vmin=min_p_sv, vmax=max_p_sv)
+# # fig.colorbar(sc1, ax=axes[1], label='Pressure (Pa)')
 # Plot the CFD data pressure field
 axes[1].set_title('CFD Pressure Field')
 axes[1].set_xlabel('x (m)')
-axes[1].set_ylabel('z (m)')
+# axes[2].set_ylabel('z (m)')
 sc2 = axes[1].scatter(
     sv_cfd_reduced[:, 0], sv_cfd_reduced[:, 2],
     c=sv_cfd_reduced[:, -1], cmap='jet', vmin=min_p_sv, vmax=max_p_sv
@@ -403,7 +447,7 @@ sc2 = axes[1].scatter(
 fig.colorbar(sc2, ax=axes[1], label='Pressure (Pa)')
 # Adjust layout and save the figure
 plt.tight_layout()
-# plt.savefig('Outputs/PIV_sv_init2_pressures.png')  # Save the figure
+# plt.savefig('Outputs/PIV_sv_epoch10000_pressures.png')  # Save the figure
 plt.show()
 
 #pitot probe comparison
@@ -416,12 +460,334 @@ plt.scatter(pitot_data[:, 0], pitot_data[:, 1], c='black', marker='x', label='Or
 plt.scatter(pitot_x_reduced, pitot_pressures_reduced, label='Reduced Pitot Data', c ='#00FFFF', marker = 's')
 plt.scatter(pitot_x_reduced, p_out_sv_np[valid_indices[:, 0], valid_indices[:, 1]], c='red', label='Model Output')
 plt.legend()
-# plt.savefig('Outputs/PIV_sv_init2_pitot.png') #TODO: save on correct models etc
+# plt.savefig('Outputs/PIV_sv_epoch10000_pitot.png') #TODO: save on correct models etc
 plt.show()
 
 
 #%% ######### WAKE VIEW ##########
-#Functions 
+print('I am running everything on the wake view data now')
+def big_lossfunc_wv(modelf, velocsf, hf, rho, mu, comp_indf, pitot_pressf, loss_fnf, print_flag=False): #for presspois3 was col_v, col_h (they were the pitot probe data in the t)
+    # get the model output
+    modelf.train()
+    p_out = modelf(velocsf) # 1x1x130x170
+
+    # stack the output with the input
+    uvp_stacked = torch.cat((velocsf[:,:2,:,:], p_out), dim=1) # 1x3x77x49
+    
+    # calculate derivatives: dudx, dudy, dvdx, dvdy, dpdx, dpdy, d2udx2, d2udy2, d2pdx2, d2pdy2
+    #Dr. Ning's code: needs fixed grid
+    dalldx = ddx(uvp_stacked, hf) #1,3,130,172
+    d2alldx2 = ddx(dalldx, hf)
+    dalldy = ddy(uvp_stacked, hf)
+    d2alldy2 = ddy(dalldy, hf)
+    dudx = dalldx[:, 0, :, :]
+    d2udx2 = d2alldx2[:, 0, :, :]
+    dvdx = dalldx[:, 1, :, :]
+    d2vdx2 = d2alldx2[:, 1, :, :]
+    dpdx = dalldx[:, 2, :, :]
+    d2pdx2 = d2alldx2[:, 2, :, :]
+    dudy = dalldy[:, 0, :, :]
+    d2udy2 = d2alldy2[:, 0, :, :]
+    dvdy = dalldy[:, 1, :, :]
+    d2vdy2 = d2alldy2[:, 1, :, :]
+    dpdy = dalldy[:, 2, :, :]
+    d2pdy2 = d2alldy2[:, 2, :, :]
+    
+    #FinDiff package
+    # dx = FinDiff()
+    
+        
+    # calculate losses
+    # pitot probe loss
+    pressure_field = p_out[0,0,:,:]
+    probe_pressures = pressure_field[comp_indf[:,0], comp_indf[:,1]] #get the pressures at the pitot probe locations
+    pitot_loss = loss_fnf(probe_pressures, pitot_pressf) #loss between the predicted pressures and the pitot probe pressures
+    
+    # momentum equations
+    u = uvp_stacked[:, 0, :, :]
+    v = uvp_stacked[:, 1, :, :]
+    xmom_loss = torch.mean((u*dudx + v*dudy + dpdx/rho - mu * (d2udx2 + d2udy2))**2)
+    ymom_loss = torch.mean((u*dvdx + v*dvdy + dpdy/rho - mu * (d2vdx2 + d2vdy2))**2)
+    p_loss = torch.mean((-rho*(d2udx2 + 2. * dudy*dvdx + d2vdy2) - d2pdx2 - d2pdy2)**2)
+    if print_flag: 
+        print_flag = False
+        print('pitot_loss: ', pitot_loss.item(),'xmom_loss:', xmom_loss.item(), 'ymom_loss:', ymom_loss.item(), 'p_loss:', p_loss.item())
+    return 50000*pitot_loss + xmom_loss + ymom_loss + p_loss/10000 #100*vertical_loss + 100*horizontal_loss + xmom_loss + 0.1*ymom_loss + 0.001*p_loss
+#%% Data Wrangling for Wake View
+#wv_veloc is in the format (pts,5) where the 5 is x,y,Vx,Vy,Vz
+#wv_cfd is (pts,7) where the 7 is x,y,z,Vx,Vy,Vz,Pressure
+wv_veloc_grid = gridify_data(wv_veloc, add_batch_dim=True) #1 x 5 x num_y (130) x num_x (170) tensor
+wv_x_grid = wv_veloc_grid[0, 0, :, :]  # shape: (num_y, num_x)
+wv_y_grid = wv_veloc_grid[0, 1, :, :]  # shape: (num_y, num_x)
+wv_z_grid = wv_veloc_grid[0, 2, :, :]  # shape: (num_y, num_x)
+#plot the wv_veloc u and the wv_cfd u to make sure they are the same
+wv_umin = torch.min(wv_veloc_grid[0,2,:,:]) #get the min velocity value
+wv_umax = torch.max(wv_veloc_grid[0,2,:,:]) #get the max velocity value
+wv_wmin = torch.min(wv_veloc_grid[0,4,:,:]) #get the min velocity value
+wv_wmax = torch.max(wv_veloc_grid[0,4,:,:]) #get the max velocity value
+plt.figure(figsize=(12,8))
+plt.title('Wake View Velocity Data')
+plt.xlabel('x (mm)')
+plt.ylabel('y (mm)')
+plt.scatter(wv_veloc_grid[0, 0, :, :].flatten(), wv_veloc_grid[0, 1, :, :].flatten(), c=wv_veloc_grid[0, -1, :, :].flatten(), cmap='jet', vmin = wv_wmin, vmax = wv_wmax) #, vmin = wv_umin, vmax = wv_umax
+plt.colorbar(label='w (m/s)')
+plt.show()
+
+#wv_cfd prep: it is the whole cfd domain, I need to keep just the values where x and y are in the range of the PIV data.
+wv_xmin = torch.min(wv_veloc[:,0]*.001) #convert mm to m
+wv_xmax = torch.max(wv_veloc[:,0]*.001) #convert mm to m
+wv_ymin = torch.min(wv_veloc[:,1]*.001) #convert mm to m
+wv_ymax = torch.max(wv_veloc[:,1]*.001) #convert mm to m
+zloc = 0.0241 #m, this is the z location of the PIV data, I need to keep only the values where z is in the range of the PIV data
+wv_cfd_reduced = wv_cfd[(wv_cfd[:,0] >= wv_xmin) & (wv_cfd[:,0] <= wv_xmax) & (wv_cfd[:,1] >= wv_ymin) & (wv_cfd[:,1] <= wv_ymax)] #keep only the values where x and y are in the range of the PIV data
+#cfd plot 
+#?Note: the wv_cfd u and v data is on a rotational frame of reference and would require a transformation to use.
+plt.figure(figsize=(12,8))
+plt.title('Wake View CFD Velocity Data')
+plt.xlabel('x (m)')
+plt.ylabel('y (m)')
+plt.scatter(-wv_cfd_reduced[:,0], wv_cfd_reduced[:,1], c= -wv_cfd_reduced[:,5], cmap='jet', vmin = wv_wmin, vmax = wv_wmax) #, vmin = wv_umin, vmax = wv_umax
+plt.colorbar(label='w (m/s)')
+plt.show()
+
+#%% Pitot Probe Comparison data Wrangling 
+print('Vertical pitot probe data')
+# === Step 1: Extract x and y grids from wv_veloc_grid ===
+wv_x_grid = wv_veloc_grid[0, 0, :, :]  # shape: (num_y, num_x)
+wv_y_grid = wv_veloc_grid[0, 1, :, :]  # shape: (num_y, num_x)
+
+# === Step 2: Find the grid column (x index) closest to pitot x ===
+pitot_x = 0  # in mm
+wv_x_array = wv_x_grid[0, :]  # assume one unique x value per column
+wv_abs_diffs_x = torch.abs(wv_x_array - pitot_x)
+wv_min_x_diff = torch.min(wv_abs_diffs_x)
+wv_valid_x_indices = torch.where(torch.abs(wv_x_array - pitot_x) == wv_min_x_diff)[0]
+wv_valid_x_index = wv_valid_x_indices[0]  # choose the first match
+print("Chosen x column index:", wv_valid_x_index.item(), "with x =", wv_x_array[wv_valid_x_index].item())
+
+# === Step 3: Identify y indices within pitot y-range ===
+wv_pitot_ymin = torch.min(pitot_data[:, 0])  # pitot_y is now in pitot_data[:, 0]
+wv_pitot_ymax = torch.max(pitot_data[:, 0])
+extend_it = True #TODO: adjust when I need
+if extend_it:
+    wv_pitot_ymin = -wv_pitot_ymax #just to see what happens
+wv_y_in_range = (wv_y_grid[:, wv_valid_x_index] >= wv_pitot_ymin) & (wv_y_grid[:, wv_valid_x_index] <= wv_pitot_ymax)
+wv_valid_y_indices = torch.where(wv_y_in_range)[0]
+print("Found", wv_valid_y_indices.numel(), "valid y indices in the range.")
+
+# === Step 4: Build final indices and extract filtered data ===
+# Create a list of valid (row, col) grid indices:
+wv_valid_indices = [(int(y_idx.item()), wv_valid_x_index.item()) for y_idx in wv_valid_y_indices]
+print("Valid grid indices (row, col):", wv_valid_indices)
+
+# Extract the filtered velocity data from wv_veloc_grid.
+# The result will have shape (channels, number of valid points).
+wv_filtered_wv_veloc = wv_veloc_grid[0, :, wv_valid_y_indices, wv_valid_x_index]
+print("Filtered velocity data shape:", wv_filtered_wv_veloc.shape)
+
+# Optionally, plot these filtered points to check:
+plt.figure(figsize=(12, 8))
+plt.title("Filtered WV Velocity Data (Pitot Region)")
+plt.xlabel("x (mm)")
+plt.ylabel("y (mm)")
+sc = plt.scatter(
+    wv_veloc_grid[0, 0, :, :].flatten(),  # grid x values
+    wv_veloc_grid[0, 1, :, :].flatten(),  # grid y values
+    c=wv_veloc_grid[0, 3, :, :].flatten(),  # grid u values
+    cmap="jet"
+)
+# Overplot the filtered points in a contrasting color:
+plt.scatter(
+    wv_x_grid[wv_valid_y_indices, wv_valid_x_index].flatten(),
+    wv_y_grid[wv_valid_y_indices, wv_valid_x_index].flatten(),
+    c="k",
+    marker="o",
+    label="Pitot region"
+)
+plt.legend()
+plt.colorbar(sc, label="u (m/s)")
+plt.show()
+
+# Reduce the pitot_data size to match valid_y_indices, i.e., average every 953 points
+wv_pitot_pressures_reduced = torch.zeros(len(wv_valid_y_indices))
+for i in range(len(wv_valid_y_indices)):
+    wv_pitot_pressures_reduced[i] = torch.mean(pitot_data[953 * i:953 * (i + 1), 1])  # average the pressures over the 953 points
+wv_valid_indices = np.array(wv_valid_indices)  # convert to numpy array for easier indexing
+
+if extend_it:
+    pitot_data_extended = pitot_data_extended = torch.cat([
+    torch.cat([-pitot_data[:, 0:1], pitot_data[:, 1:2].flip(0)], dim=1),  # Negate x-values
+    pitot_data  # Original data
+], dim=0)
+    for i in range(len(wv_valid_y_indices)):
+        wv_pitot_pressures_reduced[i] = torch.mean(pitot_data_extended[945 * i:945 * (i + 1), 1])  # average the pressures over the 953 points
+    
+    pitot_data_extended = pitot_data_extended = torch.cat([
+    torch.cat([-pitot_data[:, 0:1], pitot_data[:, 1:2]], dim=1),  # Negate x-values
+    pitot_data  # Original data
+], dim=0)
+wv_valid_indices = np.array(wv_valid_indices)  # convert to numpy array for easier indexing
+
+#%% Pitot Probe Data Wrangling
+print('Horizontal pitot probe data')
+# === Step 1: Extract x and y grids from wv_veloc_grid ===
+wv_x_grid = wv_veloc_grid[0, 0, :, :]  # shape: (num_y, num_x)
+wv_y_grid = wv_veloc_grid[0, 1, :, :]  # shape: (num_y, num_x)
+
+# === Step 2: Find the grid row (y index) closest to pitot_y ===
+pitot_y = 0  # in mm
+wv_y_array = wv_y_grid[:, 0]  # assume one unique y value per row
+wv_abs_diffs_y = torch.abs(wv_y_array - pitot_y)
+wv_min_y_diff = torch.min(wv_abs_diffs_y)
+wv_valid_y_indices = torch.where(torch.abs(wv_y_array - pitot_y) == wv_min_y_diff)[0]
+wv_valid_y_index = wv_valid_y_indices[0]  # choose the first match
+print("Chosen y row index:", wv_valid_y_index.item(), "with y =", wv_y_array[wv_valid_y_index].item())
+
+# === Step 3: Identify x indices within pitot x-range ===
+wv_pitot_xmin = torch.min(pitot_data[:, 0])  # pitot_x is now in pitot_data[:, 0]
+wv_pitot_xmax = torch.max(pitot_data[:, 0])
+wv_x_in_range = (wv_x_grid[wv_valid_y_index, :] >= wv_pitot_xmin) & (wv_x_grid[wv_valid_y_index, :] <= wv_pitot_xmax)
+wv_valid_x_indices = torch.where(wv_x_in_range)[0]
+print("Found", wv_valid_x_indices.numel(), "valid x indices in the range.")
+
+# === Step 4: Build final indices and extract filtered data ===
+# Create a list of valid (row, col) grid indices:
+wv_valid_indices = [(wv_valid_y_index.item(), int(x_idx.item())) for x_idx in wv_valid_x_indices]
+print("Valid grid indices (row, col):", wv_valid_indices)
+
+# Extract the filtered velocity data from wv_veloc_grid.
+# The result will have shape (channels, number of valid points).
+wv_filtered_wv_veloc = wv_veloc_grid[0, :, wv_valid_y_index, wv_valid_x_indices]
+print("Filtered velocity data shape:", wv_filtered_wv_veloc.shape)
+
+# Optionally, plot these filtered points to check:
+plt.figure(figsize=(12, 8))
+plt.title("Filtered WV Velocity Data (Pitot Region)")
+plt.xlabel("x (mm)")
+plt.ylabel("y (mm)")
+sc = plt.scatter(
+    wv_veloc_grid[0, 0, :, :].flatten(),  # grid x values
+    wv_veloc_grid[0, 1, :, :].flatten(),  # grid y values
+    c=wv_veloc_grid[0, 3, :, :].flatten(),  # grid u values
+    cmap="jet"
+)
+# Overplot the filtered points in a contrasting color:
+plt.scatter(
+    wv_x_grid[wv_valid_y_index, wv_valid_x_indices].flatten(),
+    wv_y_grid[wv_valid_y_index, wv_valid_x_indices].flatten(),
+    c="k",
+    marker="o",
+    label="Pitot region"
+)
+plt.legend()
+plt.colorbar(sc, label="u (m/s)")
+plt.show()
+
+# Reduce the pitot_data size to match valid_x_indices, i.e., average every 953 points
+wv_pitot_pressures_reduced = torch.zeros(len(wv_valid_x_indices))
+for i in range(len(wv_valid_x_indices)):
+    wv_pitot_pressures_reduced[i] = torch.mean(pitot_data[953 * i:953 * (i + 1), 1])  # average the pressures over the 953 points
+wv_valid_indices = np.array(wv_valid_indices)  # convert to numpy array for easier indexing
+
+# %% Setup the model and training
+wv_just_veloc = wv_veloc_grid[:,2:,:,:] #1 x 2 x num_y (131) x num_x (207) tensor
+in_chan = 2 #u,v,w
+out_chan = 1 #pressure component
+num_y_wv = wv_just_veloc.shape[2] #number of y points (131)
+num_x_wv = wv_just_veloc.shape[3] #number of x points (207)
+model = PressurePredictor(in_chan, out_chan, num_y_wv, num_x_wv) #1 x 2 x num_y (131) x num_x (207) tensor
+
+loss_fn = nn.MSELoss()
+optimizer = optim.Adam(model.parameters(), lr=1e-4)
+
+
+#%% Training Loop
+rho = 1.225 #kg/m^3
+mu = 1.823e-5 #Pa*s at apx 72deg F
+h = (torch.max(wv_x_grid) - torch.min(wv_x_grid)) / num_x_wv #grid spacing in x direction (mm)
+h = h * 0.001 #convert to m
+epochs = 10000
+plotter_val = 500
+losses = []
+model.train()
+for e in range(epochs):
+    optimizer.zero_grad()
+    loss = big_lossfunc_wv(model, wv_just_veloc, h, rho, mu, wv_valid_indices, wv_pitot_pressures_reduced, loss_fn)
+    loss.backward()
+    optimizer.step()
+    losses.append(loss.item())
+    if (e+1)%plotter_val == 0:
+        print(f'Epoch {e+1}/{epochs}, Loss: {loss.item()}')
+        big_lossfunc_wv(model, wv_just_veloc, h, rho, mu, wv_valid_indices, wv_pitot_pressures_reduced, loss_fn, print_flag=True)
+        
+
+
+  #%% Plotting / Evaluating
+#TODO: 4 things are being saved, comment or uncomment **ALL** of them
+#save the model 
+# torch.save(model, 'SavedModels/PIV_wv_fullpitot_uvonly_lre4_epoch10000') #TODO: save on correct models etc
+
+#Plot the losses 
+plt.figure()
+plt.semilogy(losses)
+plt.title('Losses')
+plt.xlabel('Epochs')
+plt.ylabel('Training Loss')
+# plt.savefig('Outputs/PIV_wv_fullpitot_uvonly_lre4_losses_epoch10000.png') #TODO: save on correct models etc
+plt.show()
+
+#Evaluate the model
+model.eval()
+p_out_wv = model(wv_just_veloc) #1 x 1 x num_y (130) x num_x (170) tensor
+p_out_wv = p_out_wv.squeeze(0).squeeze(0) #remove the batch and channel dimensions
+p_out_wv_np = p_out_wv.detach().numpy() #convert to numpy for plotting
+max_p_wv = torch.max(p_out_wv) #get the max pressure value
+min_p_wv = torch.min(p_out_wv) #get the min pressure value
+min_p_wv = -30
+
+# Create side-by-side plots
+fig, axes = plt.subplots(1, 2, figsize=(16, 8))
+# Plot the model output pressure field
+axes[0].set_title('Model Output Pressure Field')
+axes[0].set_xlabel('x (mm)')
+axes[0].set_ylabel('y (mm)')
+sc1 = axes[0].scatter(
+    wv_x_grid.flatten(), wv_y_grid.flatten(),
+    c=p_out_wv_np.flatten(), cmap='jet'
+)
+fig.colorbar(sc1, ax=axes[0], label='Pressure (Pa)')
+
+# Plot the CFD data pressure field
+axes[1].set_title('CFD Pressure Field')
+axes[1].set_xlabel('x (m)')
+# axes[1].set_ylabel('z (m)')
+sc2 = axes[1].scatter(
+    -wv_cfd_reduced[:,0], wv_cfd_reduced[:,1], c= wv_cfd_reduced[:,-1], cmap='jet') #, vmin=min_p_wv, vmax=max_p_wv
+fig.colorbar(sc2, ax=axes[1], label='Pressure (Pa)')
+# Adjust layout and save the figure
+plt.tight_layout()
+# plt.savefig('Outputs/PIV_wv_fullpitot_uvonly_lre4_epoch10000_pressures.png')  # Save the figure
+plt.show()
+
+#pitot probe comparison
+wv_pitot_y_reduced = wv_y_grid[wv_valid_y_indices, wv_valid_x_index].flatten()
+
+    
+plt.figure(figsize=(12, 8))
+plt.title('Pitot Probe Pressure Comparison')
+plt.xlabel('x (mm)')
+plt.ylabel('Pressure (Pa)')
+plt.scatter(pitot_data_extended[:, 0], pitot_data_extended[:, 1], c='black', marker='x', label='Originial Pitot Data', alpha=0.25)
+plt.scatter(wv_pitot_y_reduced, wv_pitot_pressures_reduced, label='Reduced Pitot Data', c ='#00FFFF', marker = 's')
+plt.scatter(wv_pitot_y_reduced, p_out_wv_np[wv_valid_indices[:, 0], wv_valid_indices[:, 1]], c='red', label='Model Output')
+plt.legend()
+# plt.savefig('Outputs/PIV_wv_fullpitot_uvonly_lre4_epoch10000_pitot.png') #TODO: save on correct models etc
+plt.show()
+
+
+#%% Archive
+#Functions (to be used if I get the second plane of wake view datas)
+#!TODO: I only have one plane in z, so I can't actually get any dz terms until then.
 
 def ddz(f, h):
     # 5-pt stencil
@@ -433,7 +799,7 @@ def ddz(f, h):
     return torch.cat((dfdz_bot, dfdz_central, dfdz_top), dim=1)
     
     
-def big_lossfunc_3D(modelf, velocsf, hf, rho, mu, comp_indf, pitot_pressf, loss_fnf, print_flag=False): #for presspois3 was col_v, col_h (they were the pitot probe data in the t)
+def big_lossfunc_3D(modelf, velocsf, hf, hfz, rho, mu, comp_indf, pitot_pressf, loss_fnf, print_flag=False): #for presspois3 was col_v, col_h (they were the pitot probe data in the t)
     # get the model output
     modelf.train()
     p_out = modelf(velocsf) # 1x1x130x170
@@ -447,8 +813,8 @@ def big_lossfunc_3D(modelf, velocsf, hf, rho, mu, comp_indf, pitot_pressf, loss_
     d2alldx2 = ddx(dalldx, hf)
     dalldy = ddy(uvwp_stacked, hf)
     d2alldy2 = ddy(dalldy, hf)
-    dalldz = ddz(uvwp_stacked, hf) #1,4,130,172
-    d2alldz2 = ddz(dalldz, hf)
+    dalldz = ddz(uvwp_stacked, hfz) #1,4,130,172
+    d2alldz2 = ddz(dalldz, hfz)
     #dx
     dudx = dalldx[:, 0, :, :]
     d2udx2 = d2alldx2[:, 0, :, :]
@@ -491,43 +857,12 @@ def big_lossfunc_3D(modelf, velocsf, hf, rho, mu, comp_indf, pitot_pressf, loss_
     xmom_loss = torch.mean((u*dudx + v*dudy + w*dudz + dpdx/rho - mu * (d2udx2 + d2udy2 + d2udz2))**2)
     ymom_loss = torch.mean((u*dvdx + v*dvdy + w*dvdz + dpdy/rho - mu * (d2vdx2 + d2vdy2 + d2vdz2))**2)
     zmom_loss = torch.mean((u*dwdx + v*dwdy + w*dwdz + dpdz/rho - mu * (d2vdz2 + d2udz2 + d2wdz2))**2)
-    p_loss = torch.mean((-rho*(d2udx2 + 2. * dudy*dvdx + d2vdy2) - d2pdx2 - d2pdy2)**2)
+    p_loss_2D = torch.mean((-rho*(d2udx2 + 2. * dudy*dvdx + d2vdy2) - d2pdx2 - d2pdy2)**2)
+    p_loss_3D = torch.mean((-rho*(d2udx2 + d2vdy2 + d2wdz2 + 2. * dudy*dvdx +2*dudz*dwdx + 2*dvdz*dwdy ) - d2pdx2 - d2pdy2 - d2pdz2)**2) #AI recommended NW said it looks good #TODO: Verify with a paper
     
     if print_flag:
         print_flag = False
-        print('pitot_loss: ', pitot_loss.item(),'xmom_loss:', xmom_loss.item(), 'ymom_loss:', ymom_loss.item(), 'zmom_loss: ', zmom_loss.item(), p_loss:', p_loss.item())
-    return 100000*pitot_loss + xmom_loss + ymom_loss + zmom_loss p_loss/10000 #100*vertical_loss + 100*horizontal_loss + xmom_loss + 0.1*ymom_loss + 0.001*p_loss
+        print('pitot_loss: ', pitot_loss.item(),'xmom_loss:', xmom_loss.item(), 'ymom_loss:', ymom_loss.item(), 'zmom_loss: ', zmom_loss.item(), 'p_loss_3D:', p_loss_3D.item(), 'cont_loss:', cont_loss.item())
+    return 100000*pitot_loss + xmom_loss + ymom_loss + zmom_loss + p_loss_3D/10000 #100*vertical_loss + 100*horizontal_loss + xmom_loss + 0.1*ymom_loss + 0.001*p_loss
     
-#%% Data Wrangling for Wake View
-#wv_veloc is in the format (pts,5) where the 5 is x,y,Vx,Vy,Vz
-#wv_cfd is (pts,7) where the 7 is x,y,z,Vx,Vy,Vz,Pressure
-wv_veloc_grid = gridify_data(wv_veloc, add_batch_dim=True) #1 x 5 x num_y (130) x num_x (170) tensor
-#plot the wv_veloc u and the wv_cfd u to make sure they are the same
-wv_umin = torch.min(wv_veloc_grid[0,2,:,:]) #get the min velocity value
-wv_umax = torch.max(wv_veloc_grid[0,2,:,:]) #get the max velocity value
-plt.figure(figsize=(12,8))
-plt.title('Wake View Velocity Data')
-plt.xlabel('x (mm)')
-plt.ylabel('y (mm)')
-plt.scatter(wv_veloc_grid[0, 0, :, :].flatten(), wv_veloc_grid[0, 1, :, :].flatten(), c=wv_veloc_grid[0, 2, :, :].flatten(), cmap='jet', vmin = wv_umin, vmax = wv_umax)
-plt.colorbar(label='u (m/s)')
-plt.show()
-
-#wv_cfd prep: it is the whole cfd domain, I need to keep just the values where x and y are in the range of the PIV data.
-wv_xmin = torch.min(wv_veloc[:,0]*.001) #convert mm to m
-wv_xmax = torch.max(wv_veloc[:,0]*.001) #convert mm to m
-wv_ymin = torch.min(wv_veloc[:,1]*.001) #convert mm to m
-wv_ymax = torch.max(wv_veloc[:,1]*.001) #convert mm to m
-zloc = 0.0241 #m, this is the z location of the PIV data, I need to keep only the values where z is in the range of the PIV data
-wv_cfd_reduced = wv_cfd[(wv_cfd[:,0] >= wv_xmin) & (wv_cfd[:,0] <= wv_xmax) & (wv_cfd[:,1] >= wv_ymin) & (wv_cfd[:,1] <= wv_ymax)] #keep only the values where x and y are in the range of the PIV data
-#TODO: FIx this
-#cfd plot 
-plt.figure(figsize=(12,8))
-plt.title('Wake View CFD Velocity Data')
-plt.xlabel('x (m)')
-plt.ylabel('y (m)')
-plt.scatter(wv_cfd_reduced[:,0], wv_cfd_reduced[:,1], c=wv_cfd_reduced[:,3], cmap='jet')
-plt.colorbar(label='u (m/s)')
-plt.show()
-
 # %%
